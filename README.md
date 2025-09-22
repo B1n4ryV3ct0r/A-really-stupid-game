@@ -3,7 +3,9 @@
 Yes, that’s the actual title. No, I couldn’t think of anything better. Welcome to my weird little text-based RPG that doesn’t know if it’s a *serious psychological exploration of identity* or just a half-broken game about fighting things with ASCII art.
 
 Spoiler: it’s both.
+
 Spoiler: it sucks.
+
 Spoiler: spoilers ahead.
 
 ---

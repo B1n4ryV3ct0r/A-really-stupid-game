@@ -1,4 +1,4 @@
-// AnUntitledRPG.java  (FULL — menus simplified, mirror wounds mirror to player)
+// AnUntitledRPG.java 
 
 import java.util.*;
 import java.text.SimpleDateFormat;

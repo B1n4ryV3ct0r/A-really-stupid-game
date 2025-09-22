@@ -1,4 +1,6 @@
-// AnUntitledRPG.java 
+// AnUntitledRPG.java
+// Single-file hub-based RPG with persistent consequences & mirror finale.
+// Save as AnUntitledRPG.java, compile with javac, run with java.
 
 import java.util.*;
 import java.text.SimpleDateFormat;
@@ -29,6 +31,12 @@ public class AnUntitledRPG {
     // used item flags
     private static boolean usedHerbFlag = false;
     private static boolean usedShardFlag = false;
+
+    // Relation & consequence systems
+    // Maps victim -> relation info (e.g., "family:VengefulBrother")
+    private static final Map<String,String> npcRelations = new HashMap<>();
+    // Pending world events created by your choices (ambushes, boycotts, refusal to help)
+    private static final Queue<String> pendingEvents = new LinkedList<>();
 
     // Final outcome
     private static String finalOutcome = ""; // spare / end / death / quit / ambiguous
@@ -98,6 +106,10 @@ public class AnUntitledRPG {
     private static void adjustNotoriety(int d) {
         notoriety += d;
         if (notoriety < 0) notoriety = 0;
+        // generate gossip event when notoriety grows
+        if (d > 0 && notoriety >= 5 && RNG.nextInt(100) < 40) {
+            pendingEvents.add("GossipSpread");
+        }
     }
     private static String inventoryToString() {
         StringBuilder sb = new StringBuilder();
@@ -127,9 +139,12 @@ public class AnUntitledRPG {
         waitEnter();
     }
 
-    // ======= Main hub loop (simplified menus) =======
+    // ======= Main hub loop =======
     private static void hubLoop() {
         while (true) {
+            // process pending world events before each hub render
+            processPendingEvents();
+
             if (shouldForceDescent()) {
                 println("\nThe bell's tone deepens. Windows close. People hurry along private routes.");
                 waitEnter();
@@ -184,17 +199,59 @@ public class AnUntitledRPG {
             } else if (cmd.equals("7") || cmd.equals("quit") || cmd.equals("exit")) {
                 finalOutcome = "quit"; addJournal("Player quit the game."); println("You leave the town; the bell keeps time without you."); break;
             } else {
-                // allow direct words for convenience (e.g., "market" to travel)
+                // allow direct quick travel or quick commands
                 if (cmd.isEmpty()) println("Enter a number or word for the action.");
-                else {
-                    // try interpret quick travel words
-                    travelTo(cmd);
-                }
+                else travelTo(cmd);
             }
         }
     }
 
-    // travel submenu
+    private static void processPendingEvents() {
+        // small processing: each time hub loop runs, roll for an event to happen based on queue
+        if (pendingEvents.isEmpty()) return;
+        String next = pendingEvents.peek();
+        if (next.equals("GossipSpread")) {
+            // 30% chance each hub iteration to manifest gossip
+            if (RNG.nextInt(100) < 30) {
+                pendingEvents.poll();
+                println("\nYou hear a new thread of gossip in the square: 'They say someone has been taking liberties.'");
+                addJournal("Gossip spread about player's actions.");
+                // increase subtle town tension
+                adjustNotoriety(1);
+            }
+        } else if (next.startsWith("Ambush:")) {
+            // an ambush was scheduled for Bandit Camp or Guard Gate or Road
+            if (RNG.nextInt(100) < 40) {
+                pendingEvents.poll();
+                String loc = next.substring(7);
+                println("\nA rumor reaches the streets: something is unsettled near " + loc + ".");
+                addJournal("Rumor: unsettled activity near " + loc + ".");
+                // make the location more dangerous next time visited
+                // implement by increasing notoriety and setting a flag the location uses
+                adjustNotoriety(1);
+                npcRelations.put("Event:" + loc, "Hostile");
+            }
+        } else {
+            // unknown event types: consume them to avoid infinite loop
+            pendingEvents.poll();
+        }
+    }
+
+    private static boolean shouldForceDescent() {
+        return notoriety >= 10;
+    }
+
+    private static void showHelp() {
+        println("\n--- HELP ---");
+        println("Use the simple menus: choose a number or type a short word.");
+        println("Travel: choose where to go.");
+        println("Interact: talk/act with people present.");
+        println("Explore: search nearby features.");
+        println("Status: show stats.");
+        println("Journal: show recent entries.");
+        println("Quit: exit the game.\n");
+    }
+
     private static void showTravelMenu() {
         List<String> dests = Arrays.asList("Town Square","Marnie's Farm","Market Lane","Old Library","Bridge","Guard Gate","Bandit Camp","Traveler Road","Clock Hedge");
         println("\nTravel - pick destination:");
@@ -210,11 +267,9 @@ public class AnUntitledRPG {
                 return;
             }
         } catch (NumberFormatException ignored) {}
-        // fallback to text match
         travelTo(s);
     }
 
-    // interact submenu (shows available NPCs in current hub)
     private static void showInteractMenu() {
         List<String> options = new ArrayList<>();
         switch (hub) {
@@ -246,7 +301,6 @@ public class AnUntitledRPG {
         interact(s);
     }
 
-    // explore submenu (context-sensitive)
     private static void showExploreMenu() {
         List<String> opts = new ArrayList<>();
         if (hub.equals("Town Square")) {
@@ -282,21 +336,6 @@ public class AnUntitledRPG {
             }
         } catch (NumberFormatException ignored) {}
         explore(s);
-    }
-
-    private static boolean shouldForceDescent() {
-        return notoriety >= 10;
-    }
-
-    private static void showHelp() {
-        println("\n--- HELP ---");
-        println("Use the simple menus: choose a number or type a short word.");
-        println("Travel: choose where to go.");
-        println("Interact: talk/act with people present.");
-        println("Explore: search nearby features.");
-        println("Status: show stats.");
-        println("Journal: show recent entries.");
-        println("Quit: exit the game.\n");
     }
 
     private static void travelTo(String dest) {
@@ -338,10 +377,17 @@ public class AnUntitledRPG {
 
     // ======= Scenes / NPCs =======
 
-    // Town Square (hub hub)
+    // Town Square (hub)
     private static void showTownSquare() {
         Art.square();
-        println("You stand beneath the bell. People pass by with small, familiar motions.");
+        // gossip line: if notoriety moderate-high, show whispers
+        if (notoriety >= 8) {
+            println("Whispers: 'They're the one... have you heard what they did?'");
+        } else if (notoriety >= 4) {
+            println("People glance your way with faint curiosity, quick smiles that don't last.");
+        } else {
+            println("You stand beneath the bell. People pass by with small, familiar motions.");
+        }
         println("Nearby: Marnie's Farm | Market Lane | Old Library | Bridge | Guard Gate");
         addJournal("Stood under the bell in the Town Square.");
     }
@@ -349,7 +395,15 @@ public class AnUntitledRPG {
     // Marnie's Farm (practical)
     private static void showMarnie() {
         Art.marnieFarm();
-        println("Marnie works as though she reads the weather in the plants. She speaks plainly.");
+        // Marnie remembers whether you pruned or helped
+        if (npcFlags.getOrDefault("Marnie_pruned", false)) {
+            println("Marnie moves with a narrow calm. Her hands smell of cut stems.");
+            println("She nods, and you can see a careful approval that feels like a contract.");
+        } else if (npcFlags.getOrDefault("Marnie_helped", false)) {
+            println("Marnie offers you a small smile and a cup. She seems to watch what you carry.");
+        } else {
+            println("Marnie works as though she reads the weather in the plants. She speaks plainly.");
+        }
         addJournal("Approached Marnie's Farm.");
     }
 
@@ -368,11 +422,15 @@ public class AnUntitledRPG {
                 merciful++; addJournal("Helped Marnie; gained a Ration.");
                 npcFlags.put("Marnie_helped", true);
                 adjustNotoriety(-1);
+                // consequence: Marnie may later warn others positively about you
+                npcRelations.put("Marnie", "trusts");
             } else if (c.equals("2") || c.contains("prune") || c.contains("thin")) {
                 println("You thin the sick plants. They are cut, and the smell is sharp and important.");
                 ruthless++; addJournal("Pruned plants with Marnie; uneasy feeling.");
                 npcFlags.put("Marnie_pruned", true);
                 adjustNotoriety(2);
+                // consequence: neighbors hear of cutting and Marnie grows colder to you
+                npcRelations.put("Marnie", "respects_but_warns");
             } else {
                 println("You leave the farm. Marnie watches you go.");
                 addJournal("Left Marnie's farm without acting.");
@@ -401,16 +459,21 @@ public class AnUntitledRPG {
                 inventory.put("Shard", inventory.getOrDefault("Shard",0)+1);
                 merciful++; addJournal("Taught Pebble a game; received a bead.");
                 npcFlags.put("Pebble_trusted", true);
+                npcRelations.put("PebbleFamily", "likes"); // positive relation
             } else if (c.equals("2") || c.contains("knock") || c.contains("cruel")) {
                 println("You flick the stack. Pebble cries and his trust dims.");
                 ruthless++; addJournal("Knocked Pebble's stack; trust broken.");
                 npcFlags.put("Pebble_hurt", true);
                 adjustNotoriety(2);
+                npcRelations.put("PebbleFamily", "grudges"); // family will remember
+                // schedule a small family-suspicion event
+                pendingEvents.add("Ambush:Town Square");
             } else if (c.equals("3") || c.contains("take") || c.contains("sly")) {
                 println("You pocket a bead while Pebble stares at a bug. Later he notices and cries.");
                 inventory.put("Shard", inventory.getOrDefault("Shard",0)+1);
                 ruthless++; addJournal("Stole Pebble's bead; felt small cold.");
                 adjustNotoriety(1);
+                npcRelations.put("PebbleFamily", "suspicious");
             } else {
                 println("Pebble keeps stacking stones.");
             }
@@ -426,7 +489,8 @@ public class AnUntitledRPG {
     // Market & Trader
     private static void showMarket() {
         Art.market();
-        println("Stalls cluster like small islands. Bread, trinkets, and whispered rumors exchange hands here.");
+        if (notoriety >= 5) println("Vendors glance at you, coins clutched a little tighter.");
+        else println("Stalls cluster like small islands. Bread, trinkets, and whispered rumors exchange hands here.");
         addJournal("Entered the Market Lane.");
     }
 
@@ -441,6 +505,7 @@ public class AnUntitledRPG {
                 println("You return with the package delivered. He gives you a map-scrap.");
                 npcFlags.put("Trader_helped", true);
                 merciful++; addJournal("Delivered trader's package; received a map-scrap.");
+                npcRelations.put("Trader", "favors");
             } else {
                 println("He shrugs and offers a trinket for a ration instead.");
                 if (inventory.getOrDefault("Ration",0) > 0) {
@@ -449,19 +514,22 @@ public class AnUntitledRPG {
                 } else addJournal("Declined trader's favor; no purchase.");
             }
         } else {
-            println("The trader winks; 'Good to see you again.'");
+            // trader may react to gossip
+            if (notoriety >= 6) println("The trader eyes you with a practiced smile that does not reach his fingers.");
+            else println("The trader winks; 'Good to see you again.'");
         }
         waitEnter();
     }
 
-    // ======= More scenes & interactions =======
-
     // Library & Scribe
     private static void showLibrary() {
         Art.library();
-        println("Shelves lean like tired spines. A lone scribe writes and the words sometimes fall away.");
+        if (npcFlags.getOrDefault("Library_burned", false)) {
+            println("Ash drifts around empty shelves. A scribe's quill trembles in a hand that remembers a flame.");
+        } else {
+            println("Shelves lean like tired spines. A lone scribe writes and the words sometimes fall away.");
+        }
         addJournal("Entered the Old Library.");
-        waitEnter();
     }
 
     private static void scribeInteract() {
@@ -484,6 +552,7 @@ public class AnUntitledRPG {
             choiceMade.put("Scribe_choice", true);
         } else {
             println("The scribe keeps writing. Ink lifts and falls as if breathing.");
+            if (npcFlags.getOrDefault("Library_burned", false)) println("His eyes linger on ash as if counting what was lost.");
         }
         waitEnter();
     }
@@ -505,12 +574,17 @@ public class AnUntitledRPG {
                 println("You dive and fish the keepsake from the current. The child hugs you and laughs wetly.");
                 merciful++; npcFlags.put("Child_saved", true); addJournal("Dove for the child's keepsake and saved them.");
                 adjustNotoriety(-1);
+                npcRelations.put("ChildFamily", "grateful");
             } else if (c.equals("2") || c.contains("throw") || c.contains("rope")) {
                 println("You toss a rope and pull the keepsake back. The child cheers and hides it close to their chest.");
                 merciful++; addJournal("Threw rope and saved the child's keepsake.");
+                npcRelations.put("ChildFamily", "warm");
             } else if (c.equals("3") || c.contains("take") || c.contains("steal")) {
                 println("You slip the keepsake into your pocket while the child cries. A woman glares and the air grows colder.");
                 ruthless++; adjustNotoriety(2); addJournal("Stole the child's keepsake; felt colder afterward.");
+                npcRelations.put("ChildFamily", "vengeful");
+                // schedule a small revenge event at Bridge or Town Square
+                pendingEvents.add("Ambush:Bridge");
             } else {
                 println("You leave the child and the river to their own small grief.");
                 addJournal("Left the bridge without helping.");
@@ -527,6 +601,12 @@ public class AnUntitledRPG {
     private static void showGuard() {
         Art.guard();
         println("A sentinel in dull steel stands at the gate, expression set into habit.");
+        // guard remembers bribe/plea and may gossip to captain
+        if (npcFlags.getOrDefault("Guard_bribed", false)) {
+            println("She tucks her chin and avoids the eye contact you offered before.");
+        } else if (npcFlags.getOrDefault("Guard_spared", false)) {
+            println("She gives you a small nod; in her chest something softens briefly.");
+        }
         addJournal("Approached the Guard Gate.");
     }
 
@@ -539,13 +619,19 @@ public class AnUntitledRPG {
             if (c.equals("1") || c.contains("bribe") || c.contains("coin")) {
                 println("You slip a coin. She tucks it away and steps aside with a practiced look.");
                 npcFlags.put("Guard_bribed", true); ruthless++; adjustNotoriety(1); addJournal("Bribed the gate guard.");
+                // relation: guard could inform captain or expect favor later
+                npcRelations.put("Guard", "expects_favor");
             } else if (c.equals("2") || c.contains("plead") || c.contains("talk")) {
                 println("You ask her to pass you on mercy grounds. She listens, then says, 'Words matter.' and lets you by.");
                 npcFlags.put("Guard_spared", true); merciful++; addJournal("Pleaded with guard and passed.");
+                npcRelations.put("Guard", "respectful");
             } else if (c.equals("3") || c.contains("fight") || c.contains("attack")) {
                 println("You fight. The sentinel collapses and the gate opens through absence of a keeper.");
                 fightMini("Gate Sentinel", 14, 4);
                 ruthless++; adjustNotoriety(2); addJournal("Fought the guard and forced passage.");
+                // consequence: guard's captain may seek you out later => schedule event
+                npcRelations.put("GuardFamily", "angry");
+                pendingEvents.add("Ambush:Guard Gate");
             } else {
                 println("You step away from the gate.");
             }
@@ -562,6 +648,9 @@ public class AnUntitledRPG {
     private static void showBanditCamp() {
         Art.bandit();
         println("Tents rustle like mouths. The bandits' laughter feels like knives warming.");
+        if (npcRelations.getOrDefault("BanditLeaderFamily","").equals("vengeful")) {
+            println("A posted scrap tells of a death and a promise: 'They will pay.'");
+        }
         addJournal("Approached bandit camp.");
     }
 
@@ -574,6 +663,7 @@ public class AnUntitledRPG {
             if (c.equals("1") || c.contains("rescue")) {
                 println("You sneak and free a trader tied to a post. He thanks you, voice shaking.");
                 merciful++; adjustNotoriety(-1); addJournal("Rescued trader from bandit camp.");
+                npcRelations.put("Trader", "grateful_to_you");
             } else if (c.equals("2") || c.contains("attack") || c.contains("fight")) {
                 println("You attack. Violence erupts and the leader falls begging for mercy.");
                 fightMini("Bandit Leader", 18, 5);
@@ -585,9 +675,13 @@ public class AnUntitledRPG {
                     if (d.startsWith("spare")) {
                         println("You spare him. He limps away, plans folding quietly in his head.");
                         merciful++; npcFlags.put("BanditLeader_spared", true); addJournal("Spared the bandit leader.");
+                        npcRelations.put("BanditLeaderFamily","indebted");
                     } else if (d.startsWith("kill") || d.contains("end")) {
                         println("You end him. His eyes go glassy and the camp smells of cold smoke.");
                         ruthless++; npcFlags.put("BanditLeader_killed", true); adjustNotoriety(2); addJournal("Executed the bandit leader.");
+                        // consequence: family vengeful
+                        npcRelations.put("BanditLeaderFamily","vengeful");
+                        pendingEvents.add("Ambush:Bandit Camp");
                     } else {
                         println("You question him and let him go with a debt to remember.");
                         addJournal("Questioned the bandit leader and let him live.");
@@ -600,6 +694,7 @@ public class AnUntitledRPG {
             } else if (c.equals("4") || c.contains("trap") || c.contains("set")) {
                 println("You set a trap that later catches a pair of bandits. The rest scatter into night.");
                 ruthless++; adjustNotoriety(1); addJournal("Set a trap at bandit camp; took captives.");
+                npcRelations.put("BanditCamp", "suspicious_of_you");
             } else {
                 println("You leave the tents to their dark songs.");
             }
@@ -624,7 +719,11 @@ public class AnUntitledRPG {
     // ======= Missing-ish helper scenes =======
     private static void showTraveler() {
         Art.traveler();
-        println("A lone traveler sits on a bench, polishing boots and breathing in road-smoke stories.");
+        // traveler reaction to being robbed
+        if (npcFlags.getOrDefault("Traveler_robbed", false)) {
+            println("The traveler sits with his pack gone and an eye on your hands.");
+            println("'I know when a glove fits a thief,' he says softly.");
+        } else println("A lone traveler sits on a bench, polishing boots and breathing in road-smoke stories.");
         addJournal("Encountered a traveler on the road.");
         waitEnter();
     }
@@ -642,13 +741,13 @@ public class AnUntitledRPG {
         waitEnter();
     }
 
-    // fightMini - simple combat helper used by guard and bandits
+    // ======= Combat helper =======
     private static void fightMini(String enemyName, int enemyHp, int enemyAtk) {
         println("\n--- COMBAT: " + enemyName + " ---");
         int eHp = enemyHp;
         while (eHp > 0 && hp > 0) {
             println("\nYou: " + hp + " HP   |   " + enemyName + ": " + eHp + " HP");
-            println("Options: strike | flee | status");
+            println("Options: strike | mercy | item | flee | status");
             print("> ");
             String cmd = input().trim().toLowerCase();
             if (cmd.equals("status")) { showStatus(); continue; }
@@ -656,6 +755,8 @@ public class AnUntitledRPG {
                 if (RNG.nextInt(100) < 50) {
                     println("You slip away while the enemy blinks. Flee successful.");
                     addJournal("Fled from combat with " + enemyName + ".");
+                    // fleeing is a cowardly mark
+                    ruthless++; adjustNotoriety(1);
                     return;
                 } else {
                     println("You fail to get away; the enemy strikes as you turn.");
@@ -671,6 +772,33 @@ public class AnUntitledRPG {
                 println("You strike and deal " + dmg + " damage.");
                 eHp -= dmg;
                 addJournal("Hit " + enemyName + " for " + dmg + " damage.");
+                ruthless++; adjustNotoriety(1);
+            } else if (cmd.startsWith("mercy") || cmd.startsWith("act")) {
+                // attempt mercy / act
+                println("You attempt mercy. Your calm is tested.");
+                if (RNG.nextInt(100) < 40) {
+                    println(enemyName + " shows a crack of hesitation. The fight ends without death.");
+                    merciful++; addJournal("Used mercy on " + enemyName + " and ended combat peacefully.");
+                    adjustNotoriety(-1);
+                    return;
+                } else {
+                    println(enemyName + " recoils and does not yield; it strikes.");
+                    int ed = Math.max(1, enemyAtk - 1 + RNG.nextInt(3));
+                    println(enemyName + " hits you for " + ed + " damage.");
+                    hp -= ed;
+                }
+            } else if (cmd.startsWith("item")) {
+                String[] parts = cmd.split(" ",2);
+                String it = parts.length > 1 ? parts[1].trim().toLowerCase() : "";
+                if (it.equals("herb") && inventory.getOrDefault("Herb",0) > 0) {
+                    println("You use an Herb. +6 HP.");
+                    inventory.put("Herb", inventory.get("Herb") - 1);
+                    hp = Math.min(MAX_HP, hp + 6);
+                    usedHerbFlag = true;
+                    addJournal("Used Herb during combat with " + enemyName + ".");
+                } else {
+                    println("Use what? Try: item herb");
+                }
             } else {
                 println("Hesitation costs you a small wound.");
                 hp -= 1;
@@ -751,7 +879,7 @@ public class AnUntitledRPG {
                 println("You strike and deal " + dmg + " damage to the mirror.");
                 mirrorHp -= dmg;
 
-                // NEW: every wound you inflict on the mirror appears on your own skin
+                // wound reflected to player
                 pHp -= dmg;
                 println("A wound blooms on your skin where the mirror took the blow. You take " + dmg + " damage.");
                 addJournal("Struck the mirror for " + dmg + " damage and suffered the wound.");
@@ -764,7 +892,7 @@ public class AnUntitledRPG {
                     int down = 2 + RNG.nextInt(2);
                     println("Mercy finds root; the mirror weakens. -"+ down +" HP to mirror.");
                     mirrorHp = Math.max(0, mirrorHp - down);
-                    // mirror wound mirrored to you
+                    // reflected
                     pHp -= down;
                     println("The mirror's softening cuts you as well — you take " + down + " damage.");
                     addJournal("Mercy affected the mirror; took " + down + " reflected damage.");
@@ -876,7 +1004,7 @@ public class AnUntitledRPG {
         }
     }
 
-    // Mirror taunt builder
+    // Mirror taunt builder (uses exact flags & relations to taunt)
     private static String mirrorAdaptiveTaunt(String seed) {
         List<String> pool = new ArrayList<>();
         pool.add("You called cruelty a tool until it became a blunt instrument.");
@@ -889,6 +1017,15 @@ public class AnUntitledRPG {
         if (npcFlags.getOrDefault("Library_burned", false)) pool.add("You burned words so a comfort could be born; comfort eats curiosity.");
         if (usedHerbFlag) pool.add("You mended the skin and taught the soul to adjust.");
         if (usedShardFlag) pool.add("You learnt the cut of your own jaw in the angle of glass.");
+        if (npcRelations.getOrDefault("PebbleFamily","").equals("grudges")) pool.add("Small stones remember heavy hands.");
+
+        if (npcRelations.getOrDefault("BanditLeaderFamily","").equals("vengeful")) {
+            pool.add("You ended a leader. Families learned how to keep score.");
+        }
+
+        if (npcRelations.getOrDefault("GuardFamily","").equals("angry")) {
+            pool.add("A sentinel fell for you; discipline breeds hunters.");
+        }
 
         if (ruthless > merciful + 3) {
             pool.add("You are efficient when you take; efficiency wants company.");
@@ -980,7 +1117,7 @@ public class AnUntitledRPG {
     private static boolean usedHerb() { return usedHerbFlag; }
     private static boolean usedShard() { return usedShardFlag; }
 
-    // ======= Art helper class (original ASCII art for characters & locations) =======
+    // ======= Art helper class (menus & location ASCII only) =======
     private static class Art {
         private static void println(String s) { System.out.println(s); }
         private static void pause(int ms) { if (PAUSE <= 0) return; try { Thread.sleep(ms); } catch (InterruptedException ignored) {} }
